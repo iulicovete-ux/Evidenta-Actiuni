@@ -56,8 +56,7 @@ function makeTwoDifferentFrequencies() {
 }
 
 function formatUserLine(member) {
-  const displayName = member.nickname || member.user.globalName || member.user.username;
-  return `@${displayName} | ${member.user.id}`;
+  return `<@${member.user.id}>`;
 }
 
 function uniqueSorted(arr) {
@@ -240,27 +239,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
           });
         }
 
-        const displayName =
-          interaction.member?.nickname ||
-          interaction.user.globalName ||
-          interaction.user.username;
+        const userLine = `<@${interaction.user.id}>`;
 
-        const userLine = `@${displayName} | ${interaction.user.id}`;
+const isTargeted =
+  state.absenti.includes(userLine) ||
+  state.prezenti.includes(userLine);
 
-        const isTargeted = state.absenti.some((x) => x.endsWith(`| ${interaction.user.id}`)) ||
-          state.prezenti.some((x) => x.endsWith(`| ${interaction.user.id}`));
-
-        if (!isTargeted) {
-          return interaction.reply({
-            content: "❌ Nu faci parte din rolul selectat pentru această acțiune.",
-            ephemeral: true,
-          });
-        }
-
-        state.absenti = state.absenti.filter((x) => !x.endsWith(`| ${interaction.user.id}`));
-        state.prezenti = state.prezenti.filter((x) => !x.endsWith(`| ${interaction.user.id}`));
-        state.prezenti.push(userLine);
-
+state.absenti = state.absenti.filter((x) => x !== userLine);
+state.prezenti = state.prezenti.filter((x) => x !== userLine);
+state.prezenti.push(userLine);
         const msg = await interaction.channel.messages.fetch(actionId).catch(() => null);
         if (msg) {
           await msg.edit(buildActionMessage(state));
