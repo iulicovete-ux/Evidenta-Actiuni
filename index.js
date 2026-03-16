@@ -13,7 +13,7 @@ const {
   Events,
 } = require("discord.js");
 
-console.log("✅ BOT VERSION: Evidenta Actiuni v1");
+console.log("✅ BOT VERSION: Evidenta Actiuni v2");
 
 function mustEnv(name) {
   const v = process.env[name];
@@ -69,18 +69,23 @@ function buildActionMessage(state) {
 
   const prezentiText = prezenti.length > 0 ? prezenti.join("\n") : "-";
   const absentiText = absenti.length > 0 ? absenti.join("\n") : "-";
+  const mentiuniText = state.mentiuni?.trim() ? state.mentiuni.trim() : "-";
 
   const content =
-`**Acțiune: ${state.titlu}**
-**Creată de:** \`${state.createdByName}\`
-**Data + Ora:** ${state.dataOra}
-**Locație:** ${state.locatie}
-**Rol vizat:** <@&${state.roleId}>
-**Frecvență 1:** \`${state.freq1}\`
-**Frecvență 2:** \`${state.freq2}\`
+`**\`${state.createdByName}\`:**
+**Se organizează acțiune de tip:** ${state.titlu}
 
-**Total participanți:** ${state.total}
-**Prezenți:** ${prezenti.length}
+**Detalii despre acțiune:**
+**Locație:** ${state.locatie}
+**Data/Ora:** ${state.dataOra}
+**Frecvență:** \`${state.freq1}\`
+**Back-up:** \`${state.freq2}\`
+
+**Mențiuni acțiune:**
+${mentiuniText}
+
+**Total membri:** ${state.total}
+**Confirmați:** ${prezenti.length}
 **Absenți:** ${absenti.length}
 
 ✅ **Prezenți**
@@ -95,7 +100,8 @@ Apasă pe ✅ pentru a confirma prezența.`;
     new ButtonBuilder()
       .setCustomId(`actiune_confirm_${state.id}`)
       .setLabel("Confirmă prezența")
-      .setStyle(ButtonStyle.Success),
+      .setStyle(ButtonStyle.Success)
+      .setDisabled(state.closed),
     new ButtonBuilder()
       .setCustomId(`actiune_close_${state.id}`)
       .setLabel("Închide acțiunea")
@@ -114,7 +120,7 @@ async function registerCommands() {
       .addStringOption((option) =>
         option
           .setName("titlu")
-          .setDescription("Titlul acțiunii (patrula/farm/jaf/etc...)")
+          .setDescription("Tipul acțiunii (patrula/farm/jaf/etc...)")
           .setRequired(true)
       )
       .addStringOption((option) =>
@@ -134,6 +140,12 @@ async function registerCommands() {
           .setName("rol")
           .setDescription("Rolul vizat pentru această acțiune")
           .setRequired(true)
+      )
+      .addStringOption((option) =>
+        option
+          .setName("mentiuni")
+          .setDescription("Detalii suplimentare: ce să aducă, unde se regrupează etc.")
+          .setRequired(false)
       )
       .toJSON(),
   ];
@@ -169,6 +181,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const dataOra = interaction.options.getString("data_ora", true);
       const locatie = interaction.options.getString("locatie", true);
       const role = interaction.options.getRole("rol", true);
+      const mentiuni = interaction.options.getString("mentiuni") || "";
 
       await interaction.guild.members.fetch();
 
@@ -196,6 +209,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         titlu,
         dataOra,
         locatie,
+        mentiuni,
         roleId: role.id,
         createdById: interaction.user.id,
         createdByName,
@@ -241,13 +255,21 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         const userLine = `<@${interaction.user.id}>`;
 
-const isTargeted =
-  state.absenti.includes(userLine) ||
-  state.prezenti.includes(userLine);
+        const isTargeted =
+          state.absenti.includes(userLine) ||
+          state.prezenti.includes(userLine);
 
-state.absenti = state.absenti.filter((x) => x !== userLine);
-state.prezenti = state.prezenti.filter((x) => x !== userLine);
-state.prezenti.push(userLine);
+        if (!isTargeted) {
+          return interaction.reply({
+            content: "❌ Nu faci parte din rolul selectat pentru această acțiune.",
+            ephemeral: true,
+          });
+        }
+
+        state.absenti = state.absenti.filter((x) => x !== userLine);
+        state.prezenti = state.prezenti.filter((x) => x !== userLine);
+        state.prezenti.push(userLine);
+
         const msg = await interaction.channel.messages.fetch(actionId).catch(() => null);
         if (msg) {
           await msg.edit(buildActionMessage(state));
