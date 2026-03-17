@@ -13,7 +13,7 @@ const {
   Events,
 } = require("discord.js");
 
-console.log("✅ BOT VERSION: Evidenta Actiuni v6");
+console.log("✅ BOT VERSION: Evidenta Actiuni v7");
 
 function mustEnv(name) {
   const v = process.env[name];
@@ -104,13 +104,18 @@ ${prezentiText}
 ❌ **Absenți**
 ${absentiText}
 
-Apasă pe ✅ pentru a confirma prezența.`;
+Apasă pe ✅ pentru a confirma prezența. Dacă pleci mai devreme, apasă pe „Părăsește acțiunea”.`;
 
   const buttons = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId(`actiune_confirm_${state.id}`)
       .setLabel("Confirmă prezența")
       .setStyle(ButtonStyle.Success)
+      .setDisabled(state.closed),
+    new ButtonBuilder()
+      .setCustomId(`actiune_leave_${state.id}`)
+      .setLabel("Părăsește acțiunea")
+      .setStyle(ButtonStyle.Danger)
       .setDisabled(state.closed),
     new ButtonBuilder()
       .setCustomId(`actiune_close_${state.id}`)
@@ -295,11 +300,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
 
         const absentLine = `<@${interaction.user.id}>`;
-        const alreadyPresentPrefix = `<@${interaction.user.id}> —`;
+        const presentPrefix = `<@${interaction.user.id}> —`;
 
         const isTargeted =
           state.absenti.includes(absentLine) ||
-          state.prezenti.some((x) => x.startsWith(alreadyPresentPrefix));
+          state.prezenti.some((x) => x.startsWith(presentPrefix));
 
         if (!isTargeted) {
           return interaction.reply({
@@ -308,11 +313,18 @@ client.on(Events.InteractionCreate, async (interaction) => {
           });
         }
 
+        // If already present, don't overwrite the original confirm timestamp
+        if (state.prezenti.some((x) => x.startsWith(presentPrefix))) {
+          return interaction.reply({
+            content: "❌ Ți-ai confirmat deja prezența.",
+            ephemeral: true,
+          });
+        }
+
         const unixSeconds = Math.floor(Date.now() / 1000);
         const presentLine = formatPresentUserOpen(interaction.user.id, unixSeconds);
 
         state.absenti = state.absenti.filter((x) => x !== absentLine);
-        state.prezenti = state.prezenti.filter((x) => !x.startsWith(`<@${interaction.user.id}> —`));
         state.prezenti.push(presentLine);
 
         const msg = await interaction.channel.messages.fetch(actionId).catch(() => null);
@@ -322,6 +334,71 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         return interaction.reply({
           content: "✅ Ți-ai confirmat prezența.",
+          ephemeral: true,
+        });
+      }
+
+      if (interaction.customId.startsWith("actiune_leave_")) {
+        const actionId = interaction.customId.replace("actiune_leave_", "");
+        const state = actions.get(actionId);
+
+        if (!state) {
+          return interaction.reply({
+            content: "❌ Acțiunea nu mai există în memorie.",
+            ephemeral: true,
+          });
+        }
+
+        if (state.closed) {
+          return interaction.reply({
+            content: "❌ Acțiunea este deja închisă.",
+            ephemeral: true,
+          });
+        }
+
+        const userPrefix = `<@${interaction.user.id}> —`;
+        const currentEntry = state.prezenti.find((x) => x.startsWith(userPrefix));
+
+        if (!currentEntry) {
+          return interaction.reply({
+            content: "❌ Nu poți părăsi acțiunea dacă nu ți-ai confirmat prezența.",
+            ephemeral: true,
+          });
+        }
+
+        // If already has a leaving timestamp, don't overwrite it
+        if (currentEntry.includes("→")) {
+          return interaction.reply({
+            content: "❌ Ai înregistrat deja ieșirea din acțiune.",
+            ephemeral: true,
+          });
+        }
+
+        const match = currentEntry.match(/^<@(\d+)> — <t:(\d+):t>$/);
+        if (!match) {
+          return interaction.reply({
+            content: "❌ Nu am putut procesa ora ta de intrare.",
+            ephemeral: true,
+          });
+        }
+
+        const userId = match[1];
+        const startUnix = Number(match[2]);
+        const leaveUnix = Math.floor(Date.now() / 1000);
+
+        const updatedEntry = formatPresentUserClosed(userId, startUnix, leaveUnix);
+
+        state.prezenti = state.prezenti.map((x) =>
+          x === currentEntry ? updatedEntry : x
+        );
+
+        const msg = await interaction.channel.messages.fetch(actionId).catch(() => null);
+        if (msg) {
+          await msg.edit(buildActionMessage(state));
+        }
+
+        return interaction.reply({
+          content: "✅ Ai părăsit acțiunea. Ora ieșirii a fost înregistrată.",
           ephemeral: true,
         });
       }
@@ -348,7 +425,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
         state.closed = true;
         state.closedAt = closeUnix;
 
+        // Add closing timestamp only to members who are still "open"
         state.prezenti = state.prezenti.map((entry) => {
+          if (entry.includes("→")) return entry;
+
           const match = entry.match(/^<@(\d+)> — <t:(\d+):t>$/);
           if (!match) return entry;
 
