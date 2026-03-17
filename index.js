@@ -168,14 +168,7 @@ client.once(Events.ClientReady, async () => {
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
     if (interaction.isChatInputCommand() && interaction.commandName === "actiune") {
-      const actionsChannel = await client.channels.fetch(ACTIONS_CHANNEL_ID).catch(() => null);
-
-      if (!actionsChannel || !actionsChannel.isTextBased()) {
-        return interaction.reply({
-          content: "❌ ACTIONS_CHANNEL_ID este invalid.",
-          ephemeral: true,
-        });
-      }
+     const actionsChannel = interaction.channel;
 
       const titlu = interaction.options.getString("titlu", true);
       const dataOra = interaction.options.getString("data_ora", true);
@@ -228,10 +221,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       await sent.edit(buildActionMessage(tempState));
 
-      return interaction.reply({
-        content: `✅ Acțiunea a fost creată în <#${ACTIONS_CHANNEL_ID}>.`,
-        ephemeral: true,
-      });
+     return interaction.reply({
+  content: "✅ Acțiunea a fost creată în acest canal.",
+  ephemeral: true,
+});
     }
 
     if (interaction.isButton()) {
