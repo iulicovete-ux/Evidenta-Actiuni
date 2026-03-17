@@ -13,7 +13,7 @@ const {
   Events,
 } = require("discord.js");
 
-console.log("✅ BOT VERSION: Evidenta Actiuni v5");
+console.log("✅ BOT VERSION: Evidenta Actiuni v6");
 
 function mustEnv(name) {
   const v = process.env[name];
@@ -58,8 +58,12 @@ function formatAbsentUser(member) {
   return `<@${member.user.id}>`;
 }
 
-function formatPresentUser(userId, unixSeconds) {
-  return `<@${userId}> — <t:${unixSeconds}:t>`;
+function formatPresentUserOpen(userId, startUnix) {
+  return `<@${userId}> — <t:${startUnix}:t>`;
+}
+
+function formatPresentUserClosed(userId, startUnix, endUnix) {
+  return `<@${userId}> — <t:${startUnix}:t> → <t:${endUnix}:t>`;
 }
 
 function uniqueSorted(arr) {
@@ -74,6 +78,10 @@ function buildActionMessage(state) {
   const absentiText = absenti.length > 0 ? absenti.join("\n") : "-";
   const mentiuniText = state.mentiuni?.trim() ? state.mentiuni.trim() : "-";
 
+  const closedText = state.closedAt
+    ? `\n**Acțiunea s-a închis la:** <t:${state.closedAt}:f>\n`
+    : "";
+
   const content =
 `**\`${state.createdByName}\`:**
 **Se organizează acțiune de tip:** ${state.titlu}
@@ -85,8 +93,7 @@ function buildActionMessage(state) {
 **Back-up:** \`${state.freq2}\`
 
 **Mențiuni acțiune:**
-${mentiuniText}
-
+${mentiuniText}${closedText}
 **Total membri:** ${state.total}
 **Confirmați:** ${prezenti.length}
 **Absenți:** ${absenti.length}
@@ -252,6 +259,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         prezenti: [],
         absenti,
         closed: false,
+        closedAt: null,
       };
 
       const sent = await actionsChannel.send(buildActionMessage(tempState));
@@ -301,7 +309,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
 
         const unixSeconds = Math.floor(Date.now() / 1000);
-        const presentLine = formatPresentUser(interaction.user.id, unixSeconds);
+        const presentLine = formatPresentUserOpen(interaction.user.id, unixSeconds);
 
         state.absenti = state.absenti.filter((x) => x !== absentLine);
         state.prezenti = state.prezenti.filter((x) => !x.startsWith(`<@${interaction.user.id}> —`));
@@ -336,7 +344,19 @@ client.on(Events.InteractionCreate, async (interaction) => {
           });
         }
 
+        const closeUnix = Math.floor(Date.now() / 1000);
         state.closed = true;
+        state.closedAt = closeUnix;
+
+        state.prezenti = state.prezenti.map((entry) => {
+          const match = entry.match(/^<@(\d+)> — <t:(\d+):t>$/);
+          if (!match) return entry;
+
+          const userId = match[1];
+          const startUnix = Number(match[2]);
+
+          return formatPresentUserClosed(userId, startUnix, closeUnix);
+        });
 
         const msg = await interaction.channel.messages.fetch(actionId).catch(() => null);
         if (msg) {
