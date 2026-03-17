@@ -13,7 +13,7 @@ const {
   Events,
 } = require("discord.js");
 
-console.log("✅ BOT VERSION: Evidenta Actiuni v4");
+console.log("✅ BOT VERSION: Evidenta Actiuni v5");
 
 function mustEnv(name) {
   const v = process.env[name];
@@ -54,8 +54,12 @@ function makeTwoDifferentFrequencies() {
   return [f1, f2];
 }
 
-function formatUserLine(member) {
+function formatAbsentUser(member) {
   return `<@${member.user.id}>`;
+}
+
+function formatPresentUser(userId, unixSeconds) {
+  return `<@${userId}> — <t:${unixSeconds}:t>`;
 }
 
 function uniqueSorted(arr) {
@@ -231,7 +235,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         interaction.user.globalName ||
         interaction.user.username;
 
-      const absenti = membersWithRoles.map(formatUserLine);
+      const absenti = membersWithRoles.map(formatAbsentUser);
 
       const tempState = {
         id: "temp",
@@ -282,11 +286,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
           });
         }
 
-        const userLine = `<@${interaction.user.id}>`;
+        const absentLine = `<@${interaction.user.id}>`;
+        const alreadyPresentPrefix = `<@${interaction.user.id}> —`;
 
         const isTargeted =
-          state.absenti.includes(userLine) ||
-          state.prezenti.includes(userLine);
+          state.absenti.includes(absentLine) ||
+          state.prezenti.some((x) => x.startsWith(alreadyPresentPrefix));
 
         if (!isTargeted) {
           return interaction.reply({
@@ -295,9 +300,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
           });
         }
 
-        state.absenti = state.absenti.filter((x) => x !== userLine);
-        state.prezenti = state.prezenti.filter((x) => x !== userLine);
-        state.prezenti.push(userLine);
+        const unixSeconds = Math.floor(Date.now() / 1000);
+        const presentLine = formatPresentUser(interaction.user.id, unixSeconds);
+
+        state.absenti = state.absenti.filter((x) => x !== absentLine);
+        state.prezenti = state.prezenti.filter((x) => !x.startsWith(`<@${interaction.user.id}> —`));
+        state.prezenti.push(presentLine);
 
         const msg = await interaction.channel.messages.fetch(actionId).catch(() => null);
         if (msg) {
