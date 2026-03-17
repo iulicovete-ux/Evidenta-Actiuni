@@ -13,7 +13,7 @@ const {
   Events,
 } = require("discord.js");
 
-console.log("✅ BOT VERSION: Evidenta Actiuni v2");
+console.log("✅ BOT VERSION: Evidenta Actiuni v3");
 
 function mustEnv(name) {
   const v = process.env[name];
@@ -27,7 +27,6 @@ function mustEnv(name) {
 const TOKEN = mustEnv("TOKEN");
 const CLIENT_ID = mustEnv("CLIENT_ID");
 const GUILD_ID = mustEnv("GUILD_ID");
-const ACTIONS_CHANNEL_ID = mustEnv("ACTIONS_CHANNEL_ID");
 
 const client = new Client({
   intents: [
@@ -168,7 +167,14 @@ client.once(Events.ClientReady, async () => {
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
     if (interaction.isChatInputCommand() && interaction.commandName === "actiune") {
-     const actionsChannel = interaction.channel;
+      const actionsChannel = interaction.channel;
+
+      if (!actionsChannel || !actionsChannel.isTextBased()) {
+        return interaction.reply({
+          content: "❌ Acest canal nu este valid pentru această comandă.",
+          ephemeral: true,
+        });
+      }
 
       const titlu = interaction.options.getString("titlu", true);
       const dataOra = interaction.options.getString("data_ora", true);
@@ -221,10 +227,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       await sent.edit(buildActionMessage(tempState));
 
-     return interaction.reply({
-  content: "✅ Acțiunea a fost creată în acest canal.",
-  ephemeral: true,
-});
+      return interaction.reply({
+        content: "✅ Acțiunea a fost creată în acest canal.",
+        ephemeral: true,
+      });
     }
 
     if (interaction.isButton()) {
