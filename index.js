@@ -13,7 +13,7 @@ const {
   Events,
 } = require("discord.js");
 
-console.log("✅ BOT VERSION: Evidenta Actiuni v3");
+console.log("✅ BOT VERSION: Evidenta Actiuni v4");
 
 function mustEnv(name) {
   const v = process.env[name];
@@ -136,9 +136,21 @@ async function registerCommands() {
       )
       .addRoleOption((option) =>
         option
-          .setName("rol")
-          .setDescription("Rolul vizat pentru această acțiune")
+          .setName("rol1")
+          .setDescription("Primul rol participant")
           .setRequired(true)
+      )
+      .addRoleOption((option) =>
+        option
+          .setName("rol2")
+          .setDescription("Al doilea rol participant (opțional)")
+          .setRequired(false)
+      )
+      .addRoleOption((option) =>
+        option
+          .setName("rol3")
+          .setDescription("Al treilea rol participant (opțional)")
+          .setRequired(false)
       )
       .addStringOption((option) =>
         option
@@ -179,18 +191,36 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const titlu = interaction.options.getString("titlu", true);
       const dataOra = interaction.options.getString("data_ora", true);
       const locatie = interaction.options.getString("locatie", true);
-      const role = interaction.options.getRole("rol", true);
+      const rol1 = interaction.options.getRole("rol1", true);
+      const rol2 = interaction.options.getRole("rol2");
+      const rol3 = interaction.options.getRole("rol3");
       const mentiuni = interaction.options.getString("mentiuni") || "";
 
       await interaction.guild.members.fetch();
 
-      const membersWithRole = interaction.guild.members.cache
-        .filter((member) => !member.user.bot && member.roles.cache.has(role.id))
-        .map((member) => member);
+      const selectedRoleIds = [rol1, rol2, rol3]
+        .filter(Boolean)
+        .map((role) => role.id);
 
-      if (membersWithRole.length === 0) {
+      const uniqueMembersMap = new Map();
+
+      interaction.guild.members.cache.forEach((member) => {
+        if (member.user.bot) return;
+
+        const hasAnySelectedRole = selectedRoleIds.some((roleId) =>
+          member.roles.cache.has(roleId)
+        );
+
+        if (hasAnySelectedRole) {
+          uniqueMembersMap.set(member.user.id, member);
+        }
+      });
+
+      const membersWithRoles = Array.from(uniqueMembersMap.values());
+
+      if (membersWithRoles.length === 0) {
         return interaction.reply({
-          content: "❌ Nu există membri cu rolul selectat.",
+          content: "❌ Nu există membri cu rolurile selectate.",
           ephemeral: true,
         });
       }
@@ -201,7 +231,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         interaction.user.globalName ||
         interaction.user.username;
 
-      const absenti = membersWithRole.map(formatUserLine);
+      const absenti = membersWithRoles.map(formatUserLine);
 
       const tempState = {
         id: "temp",
@@ -209,12 +239,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
         dataOra,
         locatie,
         mentiuni,
-        roleId: role.id,
+        roleIds: selectedRoleIds,
         createdById: interaction.user.id,
         createdByName,
         freq1,
         freq2,
-        total: membersWithRole.length,
+        total: membersWithRoles.length,
         prezenti: [],
         absenti,
         closed: false,
@@ -260,7 +290,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         if (!isTargeted) {
           return interaction.reply({
-            content: "❌ Nu faci parte din rolul selectat pentru această acțiune.",
+            content: "❌ Nu faci parte din participanții selectați pentru această acțiune.",
             ephemeral: true,
           });
         }
