@@ -11,6 +11,7 @@ const {
   ButtonBuilder,
   ButtonStyle,
   Events,
+  MessageFlags,
 } = require("discord.js");
 
 console.log("✅ BOT VERSION: Evidenta Actiuni v7");
@@ -195,12 +196,13 @@ client.once(Events.ClientReady, async () => {
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
     if (interaction.isChatInputCommand() && interaction.commandName === "actiune") {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
       const actionsChannel = interaction.channel;
 
       if (!actionsChannel || !actionsChannel.isTextBased()) {
-        return interaction.reply({
+        return interaction.editReply({
           content: "❌ Acest canal nu este valid pentru această comandă.",
-          ephemeral: true,
         });
       }
 
@@ -235,9 +237,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const membersWithRoles = Array.from(uniqueMembersMap.values());
 
       if (membersWithRoles.length === 0) {
-        return interaction.reply({
+        return interaction.editReply({
           content: "❌ Nu există membri cu rolurile selectate.",
-          ephemeral: true,
         });
       }
 
@@ -274,9 +275,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       await sent.edit(buildActionMessage(tempState));
 
-      return interaction.reply({
+      return interaction.editReply({
         content: "✅ Acțiunea a fost creată în acest canal.",
-        ephemeral: true,
       });
     }
 
@@ -288,14 +288,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (!state) {
           return interaction.reply({
             content: "❌ Acțiunea nu mai există în memorie. Repornește una nouă.",
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           });
         }
 
         if (state.closed) {
           return interaction.reply({
             content: "❌ Acțiunea este închisă.",
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           });
         }
 
@@ -309,15 +309,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (!isTargeted) {
           return interaction.reply({
             content: "❌ Nu faci parte din participanții selectați pentru această acțiune.",
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           });
         }
 
-        // If already present, don't overwrite the original confirm timestamp
         if (state.prezenti.some((x) => x.startsWith(presentPrefix))) {
           return interaction.reply({
             content: "❌ Ți-ai confirmat deja prezența.",
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           });
         }
 
@@ -334,7 +333,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         return interaction.reply({
           content: "✅ Ți-ai confirmat prezența.",
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       }
 
@@ -345,14 +344,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (!state) {
           return interaction.reply({
             content: "❌ Acțiunea nu mai există în memorie.",
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           });
         }
 
         if (state.closed) {
           return interaction.reply({
             content: "❌ Acțiunea este deja închisă.",
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           });
         }
 
@@ -362,15 +361,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (!currentEntry) {
           return interaction.reply({
             content: "❌ Nu poți părăsi acțiunea dacă nu ți-ai confirmat prezența.",
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           });
         }
 
-        // If already has a leaving timestamp, don't overwrite it
         if (currentEntry.includes("→")) {
           return interaction.reply({
             content: "❌ Ai înregistrat deja ieșirea din acțiune.",
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           });
         }
 
@@ -378,7 +376,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (!match) {
           return interaction.reply({
             content: "❌ Nu am putut procesa ora ta de intrare.",
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           });
         }
 
@@ -399,7 +397,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         return interaction.reply({
           content: "✅ Ai părăsit acțiunea. Ora ieșirii a fost înregistrată.",
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       }
 
@@ -410,14 +408,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (!state) {
           return interaction.reply({
             content: "❌ Acțiunea nu mai există în memorie.",
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           });
         }
 
         if (interaction.user.id !== state.createdById) {
           return interaction.reply({
             content: "❌ Doar persoana care a creat acțiunea o poate închide.",
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
           });
         }
 
@@ -425,7 +423,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         state.closed = true;
         state.closedAt = closeUnix;
 
-        // Add closing timestamp only to members who are still "open"
         state.prezenti = state.prezenti.map((entry) => {
           if (entry.includes("→")) return entry;
 
@@ -445,7 +442,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         return interaction.reply({
           content: "✅ Acțiunea a fost închisă.",
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       }
     }
@@ -453,10 +450,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
     console.error("❌ Interaction error:", err);
     try {
       if (interaction.isRepliable()) {
-        await interaction.reply({
-          content: "❌ A apărut o eroare.",
-          ephemeral: true,
-        });
+        if (interaction.deferred || interaction.replied) {
+          await interaction.followUp({
+            content: "❌ A apărut o eroare.",
+            flags: MessageFlags.Ephemeral,
+          });
+        } else {
+          await interaction.reply({
+            content: "❌ A apărut o eroare.",
+            flags: MessageFlags.Ephemeral,
+          });
+        }
       }
     } catch {}
   }
