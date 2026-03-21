@@ -13,17 +13,9 @@ const {
   Events,
   MessageFlags,
 } = require("discord.js");
-
 const { Pool } = require("pg");
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: {
-    rejectUnauthorized: false,
-  },
-});
-
-console.log("✅ BOT VERSION: Evidenta Actiuni v7");
+console.log("✅ BOT VERSION: Evidenta Actiuni v8");
 
 function mustEnv(name) {
   const v = process.env[name];
@@ -37,6 +29,14 @@ function mustEnv(name) {
 const TOKEN = mustEnv("TOKEN");
 const CLIENT_ID = mustEnv("CLIENT_ID");
 const GUILD_ID = mustEnv("GUILD_ID");
+const DATABASE_URL = mustEnv("DATABASE_URL");
+
+const pool = new Pool({
+  connectionString: DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false,
+  },
+});
 
 const client = new Client({
   intents: [
@@ -45,9 +45,6 @@ const client = new Client({
   ],
   partials: [Partials.GuildMember],
 });
-
-// actionMessageId -> state
-const actions = new Map();
 
 function makeFrequency() {
   const a = Math.floor(Math.random() * 900) + 100;
@@ -137,6 +134,42 @@ Apasă pe ✅ pentru a confirma prezența. Dacă pleci mai devreme, apasă pe �
   return { content, components: [buttons] };
 }
 
+async function initDb() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS actions (
+      id TEXT PRIMARY KEY,
+      data JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  console.log("✅ actions table ready.");
+}
+
+async function saveAction(state) {
+  await pool.query(
+    `
+      INSERT INTO actions (id, data, updated_at)
+      VALUES ($1, $2::jsonb, NOW())
+      ON CONFLICT (id)
+      DO UPDATE SET
+        data = EXCLUDED.data,
+        updated_at = NOW()
+    `,
+    [state.id, JSON.stringify(state)]
+  );
+}
+
+async function loadAction(id) {
+  const res = await pool.query(
+    `SELECT data FROM actions WHERE id = $1`,
+    [id]
+  );
+
+  return res.rows[0]?.data || null;
+}
+
 async function registerCommands() {
   const commands = [
     new SlashCommandBuilder()
@@ -181,7 +214,7 @@ async function registerCommands() {
       .addStringOption((option) =>
         option
           .setName("mentiuni")
-          .setDescription("Detalii suplimentare")
+          .setDescription("Detalii suplimentare: ce să aducă, unde se regrupează etc.")
           .setRequired(false)
       )
       .toJSON(),
@@ -197,17 +230,317 @@ async function registerCommands() {
   console.log("✅ Slash commands registered.");
 }
 
+async function updateActionMessage(state, fallbackChannel) {
+  let channel = fallbackChannel ?? null;
+
+  if (!channel || channel.id !== state.channelId) {
+    channel = await client.channels.fetch(state.channelId).catch(() => null);
+  }
+
+  if (!channel || !channel.isTextBased()) {
+    console.error(`❌ Could not fetch channel ${state.channelId} for action ${state.id}`);
+    return;
+  }
+
+  const msg = await channel.messages.fetch(state.id).catch(() => null);
+  if (!msg) {
+    console.error(`❌ Could not fetch message ${state.id} for action update.`);
+    return;
+  }
+
+  await msg.edit(buildActionMessage(state));
+}
+
 client.once(Events.ClientReady, async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 
   try {
     const res = await pool.query("SELECT NOW()");
     console.log("🟢 DB connected:", res.rows[0]);
-  } catch (err) {
-    console.error("🔴 DB connection failed:", err);
-  }
 
-  await registerCommands();
+    await initDb();
+    await registerCommands();
+  } catch (err) {
+    console.error("🔴 Startup error:", err);
+  }
+});
+
+client.on(Events.InteractionCreate, async (interaction) => {
+  try {
+    if (interaction.isChatInputCommand() && interaction.commandName === "actiune") {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+      const actionsChannel = interaction.channel;
+
+      if (!actionsChannel || !actionsChannel.isTextBased()) {
+        return interaction.editReply({
+          content: "❌ Acest canal nu este valid pentru această comandă.",
+        });
+      }
+
+      const titlu = interaction.options.getString("titlu", true);
+      const dataOra = interaction.options.getString("data_ora", true);
+      const locatie = interaction.options.getString("locatie", true);
+      const rol1 = interaction.options.getRole("rol1", true);
+      const rol2 = interaction.options.getRole("rol2");
+      const rol3 = interaction.options.getRole("rol3");
+      const mentiuni = interaction.options.getString("mentiuni") || "";
+
+      await interaction.guild.members.fetch();
+
+      const selectedRoleIds = [rol1, rol2, rol3]
+        .filter(Boolean)
+        .map((role) => role.id);
+
+      const uniqueMembersMap = new Map();
+
+      interaction.guild.members.cache.forEach((member) => {
+        if (member.user.bot) return;
+
+        const hasAnySelectedRole = selectedRoleIds.some((roleId) =>
+          member.roles.cache.has(roleId)
+        );
+
+        if (hasAnySelectedRole) {
+          uniqueMembersMap.set(member.user.id, member);
+        }
+      });
+
+      const membersWithRoles = Array.from(uniqueMembersMap.values());
+
+      if (membersWithRoles.length === 0) {
+        return interaction.editReply({
+          content: "❌ Nu există membri cu rolurile selectate.",
+        });
+      }
+
+      const [freq1, freq2] = makeTwoDifferentFrequencies();
+      const createdByName =
+        interaction.member?.nickname ||
+        interaction.user.globalName ||
+        interaction.user.username;
+
+      const absenti = membersWithRoles.map(formatAbsentUser);
+
+      const tempState = {
+        id: "temp",
+        guildId: interaction.guildId,
+        channelId: interaction.channelId,
+        titlu,
+        dataOra,
+        locatie,
+        mentiuni,
+        roleIds: selectedRoleIds,
+        createdById: interaction.user.id,
+        createdByName,
+        freq1,
+        freq2,
+        total: membersWithRoles.length,
+        prezenti: [],
+        absenti,
+        closed: false,
+        closedAt: null,
+      };
+
+      const sent = await actionsChannel.send(buildActionMessage(tempState));
+
+      tempState.id = sent.id;
+
+      await saveAction(tempState);
+      await sent.edit(buildActionMessage(tempState));
+
+      console.log(`📝 Action created and saved: ${tempState.id}`);
+
+      return interaction.editReply({
+        content: "✅ Acțiunea a fost creată în acest canal.",
+      });
+    }
+
+    if (interaction.isButton()) {
+      if (interaction.customId.startsWith("actiune_confirm_")) {
+        const actionId = interaction.customId.replace("actiune_confirm_", "");
+        const state = await loadAction(actionId);
+
+        if (!state) {
+          return interaction.reply({
+            content: "❌ Acțiunea nu mai există în baza de date. Repornește una nouă.",
+            flags: MessageFlags.Ephemeral,
+          });
+        }
+
+        if (state.closed) {
+          return interaction.reply({
+            content: "❌ Acțiunea este închisă.",
+            flags: MessageFlags.Ephemeral,
+          });
+        }
+
+        const absentLine = `<@${interaction.user.id}>`;
+        const presentPrefix = `<@${interaction.user.id}> —`;
+
+        const isTargeted =
+          state.absenti.includes(absentLine) ||
+          state.prezenti.some((x) => x.startsWith(presentPrefix));
+
+        if (!isTargeted) {
+          return interaction.reply({
+            content: "❌ Nu faci parte din participanții selectați pentru această acțiune.",
+            flags: MessageFlags.Ephemeral,
+          });
+        }
+
+        if (state.prezenti.some((x) => x.startsWith(presentPrefix))) {
+          return interaction.reply({
+            content: "❌ Ți-ai confirmat deja prezența.",
+            flags: MessageFlags.Ephemeral,
+          });
+        }
+
+        const unixSeconds = Math.floor(Date.now() / 1000);
+        const presentLine = formatPresentUserOpen(interaction.user.id, unixSeconds);
+
+        state.absenti = state.absenti.filter((x) => x !== absentLine);
+        state.prezenti.push(presentLine);
+
+        await saveAction(state);
+        await updateActionMessage(state, interaction.channel);
+
+        return interaction.reply({
+          content: "✅ Ți-ai confirmat prezența.",
+          flags: MessageFlags.Ephemeral,
+        });
+      }
+
+      if (interaction.customId.startsWith("actiune_leave_")) {
+        const actionId = interaction.customId.replace("actiune_leave_", "");
+        const state = await loadAction(actionId);
+
+        if (!state) {
+          return interaction.reply({
+            content: "❌ Acțiunea nu mai există în baza de date.",
+            flags: MessageFlags.Ephemeral,
+          });
+        }
+
+        if (state.closed) {
+          return interaction.reply({
+            content: "❌ Acțiunea este deja închisă.",
+            flags: MessageFlags.Ephemeral,
+          });
+        }
+
+        const userPrefix = `<@${interaction.user.id}> —`;
+        const currentEntry = state.prezenti.find((x) => x.startsWith(userPrefix));
+
+        if (!currentEntry) {
+          return interaction.reply({
+            content: "❌ Nu poți părăsi acțiunea dacă nu ți-ai confirmat prezența.",
+            flags: MessageFlags.Ephemeral,
+          });
+        }
+
+        if (currentEntry.includes("→")) {
+          return interaction.reply({
+            content: "❌ Ai înregistrat deja ieșirea din acțiune.",
+            flags: MessageFlags.Ephemeral,
+          });
+        }
+
+        const match = currentEntry.match(/^<@(\d+)> — <t:(\d+):t>$/);
+        if (!match) {
+          return interaction.reply({
+            content: "❌ Nu am putut procesa ora ta de intrare.",
+            flags: MessageFlags.Ephemeral,
+          });
+        }
+
+        const userId = match[1];
+        const startUnix = Number(match[2]);
+        const leaveUnix = Math.floor(Date.now() / 1000);
+
+        const updatedEntry = formatPresentUserClosed(userId, startUnix, leaveUnix);
+
+        state.prezenti = state.prezenti.map((x) =>
+          x === currentEntry ? updatedEntry : x
+        );
+
+        await saveAction(state);
+        await updateActionMessage(state, interaction.channel);
+
+        return interaction.reply({
+          content: "✅ Ai părăsit acțiunea. Ora ieșirii a fost înregistrată.",
+          flags: MessageFlags.Ephemeral,
+        });
+      }
+
+      if (interaction.customId.startsWith("actiune_close_")) {
+        const actionId = interaction.customId.replace("actiune_close_", "");
+        const state = await loadAction(actionId);
+
+        if (!state) {
+          return interaction.reply({
+            content: "❌ Acțiunea nu mai există în baza de date.",
+            flags: MessageFlags.Ephemeral,
+          });
+        }
+
+        if (interaction.user.id !== state.createdById) {
+          return interaction.reply({
+            content: "❌ Doar persoana care a creat acțiunea o poate închide.",
+            flags: MessageFlags.Ephemeral,
+          });
+        }
+
+        if (state.closed) {
+          return interaction.reply({
+            content: "❌ Acțiunea este deja închisă.",
+            flags: MessageFlags.Ephemeral,
+          });
+        }
+
+        const closeUnix = Math.floor(Date.now() / 1000);
+        state.closed = true;
+        state.closedAt = closeUnix;
+
+        state.prezenti = state.prezenti.map((entry) => {
+          if (entry.includes("→")) return entry;
+
+          const match = entry.match(/^<@(\d+)> — <t:(\d+):t>$/);
+          if (!match) return entry;
+
+          const userId = match[1];
+          const startUnix = Number(match[2]);
+
+          return formatPresentUserClosed(userId, startUnix, closeUnix);
+        });
+
+        await saveAction(state);
+        await updateActionMessage(state, interaction.channel);
+
+        return interaction.reply({
+          content: "✅ Acțiunea a fost închisă.",
+          flags: MessageFlags.Ephemeral,
+        });
+      }
+    }
+  } catch (err) {
+    console.error("❌ Interaction error:", err);
+    try {
+      if (interaction.isRepliable()) {
+        if (interaction.deferred || interaction.replied) {
+          await interaction.followUp({
+            content: "❌ A apărut o eroare.",
+            flags: MessageFlags.Ephemeral,
+          });
+        } else {
+          await interaction.reply({
+            content: "❌ A apărut o eroare.",
+            flags: MessageFlags.Ephemeral,
+          });
+        }
+      }
+    } catch {}
+  }
 });
 
 client.login(TOKEN);
